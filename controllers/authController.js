@@ -46,9 +46,9 @@ const login = async (req, res) => {
     }
 
     // Fallback: env-var based auth (for serverless/no-DB deployments)
-    const envEmail = process.env.ADMIN_EMAIL || "admin@nestchat.com";
-    const envPassword = process.env.ADMIN_PASSWORD || "Admin@123456";
-    const envName = process.env.ADMIN_NAME || "Super Admin";
+    const envEmail = (process.env.ADMIN_EMAIL || "admin@nestchat.com").trim();
+    const envPassword = (process.env.ADMIN_PASSWORD || "Admin@123456").trim();
+    const envName = (process.env.ADMIN_NAME || "Super Admin").trim();
 
     if (email.toLowerCase() !== envEmail.toLowerCase() || password !== envPassword) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
