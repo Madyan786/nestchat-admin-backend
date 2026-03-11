@@ -11,30 +11,34 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json({ limit: "10mb" }));
 
-// MongoDB connection (cached for serverless)
-let isConnected = false;
+// MongoDB connection (optional - cached for serverless)
+let dbAttempted = false;
 
 async function connectDB() {
-  if (isConnected) return;
-  const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/nestchat";
+  if (dbAttempted) return;
+  dbAttempted = true;
+  const MONGODB_URI = process.env.MONGODB_URI;
+  if (!MONGODB_URI) {
+    console.log("⚠️  No MONGODB_URI set - running in no-DB mode (env-var auth)");
+    return;
+  }
   try {
     await mongoose.connect(MONGODB_URI);
-    isConnected = true;
     console.log("✅ MongoDB connected");
   } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
+    console.error("⚠️  MongoDB connection failed, falling back to no-DB mode:", err.message);
   }
 }
 
-// Connect DB before handling any request
+// Try DB connection before handling requests
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
 // Routes
-app.get("/", (req, res) => res.json({ message: "NestChat Admin API" }));
-app.get("/api", (req, res) => res.json({ message: "NestChat Admin API" }));
+app.get("/", (req, res) => res.json({ message: "NestChat Admin API", status: "running" }));
+app.get("/api", (req, res) => res.json({ message: "NestChat Admin API", status: "running" }));
 app.use("/api/admin", adminRoutes);
 
 module.exports = app;
