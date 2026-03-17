@@ -223,62 +223,32 @@ const browsePath = async (req, res) => {
   }
 };
 
-// Download files as zip
-const downloadAsZip = async (req, res) => {
-  const { id } = req.params;
-  const { fileType } = req.query; // images, videos, documents, voiceNotes, audio, gallery
-  
+// Proxy a single file download (bypasses CORS for frontend zip creation)
+const proxyFile = async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ success: false, message: "url param required" });
+
   try {
-    const phone = decodeURIComponent(id);
-    const allFiles = await storage.getUserAllFiles(phone);
-    
-    let filesToZip = [];
-    let zipName = `${phone.replace(/\+/g, '')}_${fileType || 'all'}.zip`;
-    
-    if (fileType && allFiles[fileType]) {
-      filesToZip = allFiles[fileType];
-    } else if (!fileType) {
-      // Download all files
-      filesToZip = [
-        ...(allFiles.images || []),
-        ...(allFiles.videos || []),
-        ...(allFiles.documents || []),
-        ...(allFiles.voiceNotes || []),
-        ...(allFiles.audio || []),
-        ...(allFiles.gallery || []),
-      ];
-      zipName = `${phone.replace(/\+/g, '')}_all_files.zip`;
-    }
-    
-    if (filesToZip.length === 0) {
-      return res.status(404).json({ success: false, message: 'No files found' });
-    }
-    
-    const archiver = require('archiver');
-    const axios = require('axios');
-    
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
-    
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.pipe(res);
-    
-    // Download and add each file to zip
-    for (const file of filesToZip) {
-      try {
-        const response = await axios.get(file.downloadUrl, { responseType: 'stream' });
-        archive.append(response.data, { name: file.fileName || file.name });
-      } catch (err) {
-        console.error(`Failed to download ${file.name}:`, err.message);
+    const https = require("https");
+    const http = require("http");
+    const parsedUrl = new URL(url);
+    const client = parsedUrl.protocol === "https:" ? https : http;
+
+    client.get(url, { timeout: 30000 }, (upstream) => {
+      if (upstream.statusCode !== 200) {
+        return res.status(upstream.statusCode || 500).json({ success: false, message: "File fetch failed" });
       }
-    }
-    
-    await archive.finalize();
+      // Forward content headers
+      if (upstream.headers["content-type"]) res.setHeader("Content-Type", upstream.headers["content-type"]);
+      if (upstream.headers["content-length"]) res.setHeader("Content-Length", upstream.headers["content-length"]);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      upstream.pipe(res);
+    }).on("error", (err) => {
+      console.error("Proxy error:", err.message);
+      if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+    });
   } catch (err) {
-    console.error('Download zip error:', err);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: err.message });
-    }
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -292,5 +262,5 @@ module.exports = {
   setUserCategory,
   getStorageOverview,
   browsePath,
-  downloadAsZip,
+  proxyFile,
 };
