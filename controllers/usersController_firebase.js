@@ -1,19 +1,22 @@
 const storage = require("../services/firebaseStorage");
 
-// In-memory category store (persisted to Firestore when available)
+// In-memory category store (persisted to Firestore)
 let userCategories = {}; // { "+923...": "general" | "government" | "terrorist" }
-let categoriesLoaded = false;
+let categoriesLoadedAt = 0;
+const CATEGORIES_TTL = 30 * 1000; // Reload from Firestore every 30 seconds
 
-// Try to load/save categories from Firestore
+// Load categories from Firestore (with short TTL so different serverless instances stay in sync)
 async function loadCategories() {
-  if (categoriesLoaded) return;
+  if (Date.now() - categoriesLoadedAt < CATEGORIES_TTL) return;
   try {
     const { getFirestore } = require("../config/firebase");
     const db = getFirestore();
     const snap = await db.collection("userCategories").get();
-    snap.forEach((doc) => { userCategories[doc.id] = doc.data().category || "general"; });
+    const fresh = {};
+    snap.forEach((doc) => { fresh[doc.id] = doc.data().category || "general"; });
+    userCategories = fresh;
   } catch (e) { console.log("Categories: using in-memory fallback"); }
-  categoriesLoaded = true;
+  categoriesLoadedAt = Date.now();
 }
 
 async function saveCategory(phone, category) {
@@ -22,7 +25,9 @@ async function saveCategory(phone, category) {
     const { getFirestore } = require("../config/firebase");
     const db = getFirestore();
     await db.collection("userCategories").doc(phone).set({ category, updatedAt: new Date().toISOString() });
-  } catch (e) { /* Firestore not available, in-memory only */ }
+  } catch (e) { console.error("Failed to save category to Firestore:", e.message); }
+  // Force reload on next request so change is immediately visible
+  categoriesLoadedAt = 0;
 }
 
 // Cache users list for 5 minutes
