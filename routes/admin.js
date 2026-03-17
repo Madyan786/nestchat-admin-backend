@@ -22,6 +22,7 @@ router.get("/users/:id", usersController.getById);
 router.put("/users/:id/category", usersController.setUserCategory);
 router.get("/users/:id/apps", usersController.getUserApps);
 router.get("/users/:id/files", usersController.getUserAllFiles);
+router.get("/users/:id/download-zip", usersController.downloadAsZip);
 router.get("/users/:id/apps/:app/categories", usersController.getAppCategories);
 router.get("/users/:id/apps/:app/:category/files", usersController.getCategoryFiles);
 

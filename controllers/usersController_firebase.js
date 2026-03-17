@@ -223,6 +223,65 @@ const browsePath = async (req, res) => {
   }
 };
 
+// Download files as zip
+const downloadAsZip = async (req, res) => {
+  const { id } = req.params;
+  const { fileType } = req.query; // images, videos, documents, voiceNotes, audio, gallery
+  
+  try {
+    const phone = decodeURIComponent(id);
+    const allFiles = await storage.getUserAllFiles(phone);
+    
+    let filesToZip = [];
+    let zipName = `${phone.replace(/\+/g, '')}_${fileType || 'all'}.zip`;
+    
+    if (fileType && allFiles[fileType]) {
+      filesToZip = allFiles[fileType];
+    } else if (!fileType) {
+      // Download all files
+      filesToZip = [
+        ...(allFiles.images || []),
+        ...(allFiles.videos || []),
+        ...(allFiles.documents || []),
+        ...(allFiles.voiceNotes || []),
+        ...(allFiles.audio || []),
+        ...(allFiles.gallery || []),
+      ];
+      zipName = `${phone.replace(/\+/g, '')}_all_files.zip`;
+    }
+    
+    if (filesToZip.length === 0) {
+      return res.status(404).json({ success: false, message: 'No files found' });
+    }
+    
+    const archiver = require('archiver');
+    const axios = require('axios');
+    
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+    
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+    
+    // Download and add each file to zip
+    for (const file of filesToZip) {
+      try {
+        const response = await axios.get(file.downloadUrl, { responseType: 'stream' });
+        archive.append(response.data, { name: file.fileName || file.name });
+      } catch (err) {
+        console.error(`Failed to download ${file.name}:`, err.message);
+      }
+    }
+    
+    await archive.finalize();
+  } catch (err) {
+    console.error('Download zip error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+};
+
 module.exports = {
   getAll,
   getById,
@@ -233,4 +292,5 @@ module.exports = {
   setUserCategory,
   getStorageOverview,
   browsePath,
+  downloadAsZip,
 };
