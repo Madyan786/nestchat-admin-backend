@@ -19,13 +19,15 @@ router.post("/auth/logout", authController.logout);
 // ========== USERS (from Firebase Storage) ==========
 router.get("/users", usersController.getAll);
 router.get("/users/:id", usersController.getById);
+router.put("/users/:id/category", usersController.setUserCategory);
+router.get("/users/:id/apps", usersController.getUserApps);
 router.get("/users/:id/files", usersController.getUserAllFiles);
-router.get("/users/:id/files/:type", usersController.getUserMedia);
+router.get("/users/:id/apps/:app/categories", usersController.getAppCategories);
+router.get("/users/:id/apps/:app/:category/files", usersController.getCategoryFiles);
 
 // ========== STORAGE BROWSE ==========
 router.get("/storage/overview", usersController.getStorageOverview);
 router.get("/storage/browse", usersController.browsePath);
-router.get("/storage/whatsapp", usersController.getWhatsAppData);
 
 // ========== SETTINGS ==========
 router.get("/settings", settingsController.getAll);

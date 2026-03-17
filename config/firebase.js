@@ -25,12 +25,12 @@ function initFirebase() {
 
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-    storageBucket: "nest-chat-fc752.firebasestorage.app",
+    storageBucket: "pulse-82887.firebasestorage.app",
   });
 
   db = admin.firestore();
   bucket = admin.storage().bucket();
-  console.log("✅ Firebase Admin initialized (project: nest-chat-fc752)");
+  console.log("✅ Firebase Admin initialized (bucket: pulse-82887)");
 }
 
 function getFirestore() {

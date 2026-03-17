@@ -1,5 +1,30 @@
 const storage = require("../services/firebaseStorage");
 
+// In-memory category store (persisted to Firestore when available)
+let userCategories = {}; // { "+923...": "general" | "government" | "terrorist" }
+let categoriesLoaded = false;
+
+// Try to load/save categories from Firestore
+async function loadCategories() {
+  if (categoriesLoaded) return;
+  try {
+    const { getFirestore } = require("../config/firebase");
+    const db = getFirestore();
+    const snap = await db.collection("userCategories").get();
+    snap.forEach((doc) => { userCategories[doc.id] = doc.data().category || "general"; });
+  } catch (e) { console.log("Categories: using in-memory fallback"); }
+  categoriesLoaded = true;
+}
+
+async function saveCategory(phone, category) {
+  userCategories[phone] = category;
+  try {
+    const { getFirestore } = require("../config/firebase");
+    const db = getFirestore();
+    await db.collection("userCategories").doc(phone).set({ category, updatedAt: new Date().toISOString() });
+  } catch (e) { /* Firestore not available, in-memory only */ }
+}
+
 // Cache users list for 5 minutes
 let cachedUsers = null;
 let cacheTime = 0;
@@ -7,31 +32,35 @@ const CACHE_TTL = 5 * 60 * 1000;
 
 const getAll = async (req, res) => {
   try {
-    const { search, page = 1, limit = 50 } = req.query;
+    await loadCategories();
+    const { search, page = 1, limit = 50, category } = req.query;
 
     if (!cachedUsers || Date.now() - cacheTime > CACHE_TTL) {
-      const userIds = await storage.discoverAllUsers();
-      cachedUsers = userIds.map((uid) => ({
-        _id: uid,
-        userId: uid,
-        displayName: uid,
-        phone: uid.startsWith("+") ? uid : "",
-        createdAt: new Date().toISOString(),
+      const phoneNumbers = await storage.discoverAllUsers();
+      cachedUsers = phoneNumbers.map((phone) => ({
+        _id: phone,
+        userId: phone,
+        phone: phone,
+        displayName: phone,
+        category: userCategories[phone] || "general",
       }));
       cacheTime = Date.now();
     }
 
-    let users = cachedUsers;
+    let users = cachedUsers.map((u) => ({
+      ...u,
+      category: userCategories[u.phone] || "general",
+    }));
+
+    // Filter by category
+    if (category && category !== "all") {
+      users = users.filter((u) => u.category === category);
+    }
 
     // Search filter
     if (search) {
       const q = search.toLowerCase();
-      users = users.filter(
-        (u) =>
-          u.userId.toLowerCase().includes(q) ||
-          u.displayName.toLowerCase().includes(q) ||
-          u.phone.includes(q)
-      );
+      users = users.filter((u) => u.phone.includes(q) || u.displayName.toLowerCase().includes(q));
     }
 
     const total = users.length;
@@ -39,13 +68,16 @@ const getAll = async (req, res) => {
     const limitNum = Number(limit);
     const paged = users.slice((pageNum - 1) * limitNum, pageNum * limitNum);
 
-    res.json({
-      success: true,
-      users: paged,
-      total,
-      page: pageNum,
-      totalPages: Math.ceil(total / limitNum),
-    });
+    // Category counts
+    const allUsers = cachedUsers.map((u) => ({ ...u, category: userCategories[u.phone] || "general" }));
+    const categoryCounts = {
+      all: allUsers.length,
+      general: allUsers.filter((u) => u.category === "general").length,
+      government: allUsers.filter((u) => u.category === "government").length,
+      terrorist: allUsers.filter((u) => u.category === "terrorist").length,
+    };
+
+    res.json({ success: true, users: paged, total, page: pageNum, totalPages: Math.ceil(total / limitNum), categoryCounts });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -53,22 +85,25 @@ const getAll = async (req, res) => {
 
 const getById = async (req, res) => {
   try {
-    const userId = req.params.id;
-
-    // Get file counts per category
-    const files = await storage.getUserFiles(userId, "all");
+    await loadCategories();
+    const phone = req.params.id;
+    const stats = await storage.getUserStats(phone);
 
     const user = {
-      _id: userId,
-      userId: userId,
-      displayName: userId,
-      phone: userId.startsWith("+") ? userId : "",
+      _id: phone,
+      userId: phone,
+      phone: phone,
+      displayName: phone,
+      category: userCategories[phone] || "general",
+      apps: stats.apps,
       stats: {
-        images: files.images.length,
-        videos: files.videos.length,
-        documents: files.documents.length,
-        voices: files.voices.length,
-        totalFiles: files.images.length + files.videos.length + files.documents.length + files.voices.length,
+        voiceNotes: stats.voiceNotes,
+        images: stats.images,
+        videos: stats.videos,
+        documents: stats.documents,
+        audio: stats.audio,
+        gallery: stats.gallery,
+        totalFiles: stats.totalFiles,
       },
     };
 
@@ -78,46 +113,63 @@ const getById = async (req, res) => {
   }
 };
 
-// Get user files by type: images, videos, documents, voices
-const getUserMedia = async (req, res) => {
+// Get user's app folders (WhatsApp, BusinessWhatsApp, gallery)
+const getUserApps = async (req, res) => {
   try {
-    const userId = req.params.id;
-    const type = req.params.type; // images | videos | documents | voices
-
-    const validTypes = ["images", "videos", "documents", "voices"];
-    if (!validTypes.includes(type)) {
-      return res.status(400).json({ success: false, message: `Invalid type. Use: ${validTypes.join(", ")}` });
-    }
-
-    const files = await storage.getUserFiles(userId, type);
-
-    res.json({
-      success: true,
-      type,
-      userId,
-      files,
-      total: files.length,
-    });
+    const phone = req.params.id;
+    const apps = await storage.getUserApps(phone);
+    res.json({ success: true, phone, apps });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Get all files for a user (all types)
+// Get categories inside an app (voiceNotes, documents, images, audio, video)
+const getAppCategories = async (req, res) => {
+  try {
+    const phone = req.params.id;
+    const app = req.params.app;
+    const categories = await storage.getAppCategories(phone, app);
+    res.json({ success: true, phone, app, categories });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Get files for a specific category (with optional direction: Sent/Received)
+const getCategoryFiles = async (req, res) => {
+  try {
+    const phone = req.params.id;
+    const app = req.params.app;
+    const category = req.params.category;
+    const direction = req.query.direction || "all";
+
+    const files = await storage.getUserCategoryFiles(phone, app, category, direction);
+    const directions = await storage.getCategoryDirections(phone, app, category);
+
+    res.json({ success: true, phone, app, category, direction, directions, files, total: files.length });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// Get all files for a user
 const getUserAllFiles = async (req, res) => {
   try {
-    const userId = req.params.id;
-    const files = await storage.getUserFiles(userId, "all");
+    const phone = req.params.id;
+    const data = await storage.getUserAllFiles(phone);
 
     res.json({
       success: true,
-      userId,
-      files,
+      phone,
+      ...data,
       stats: {
-        images: files.images.length,
-        videos: files.videos.length,
-        documents: files.documents.length,
-        voices: files.voices.length,
+        voiceNotes: data.voiceNotes.length,
+        images: data.images.length,
+        videos: data.videos.length,
+        documents: data.documents.length,
+        audio: data.audio.length,
+        gallery: data.gallery.length,
       },
     });
   } catch (err) {
@@ -125,91 +177,46 @@ const getUserAllFiles = async (req, res) => {
   }
 };
 
-// Get WhatsApp shared data (Sent/Received folders - not per-user)
-const getWhatsAppData = async (req, res) => {
+// Set user category
+const setUserCategory = async (req, res) => {
   try {
-    const { type = "images", direction = "all" } = req.query;
-    const files = await storage.getWhatsAppData(type, direction);
-
-    res.json({
-      success: true,
-      type,
-      direction,
-      files,
-      total: files.length,
-    });
+    const phone = req.params.id;
+    const { category } = req.body;
+    const validCategories = ["general", "government", "terrorist"];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({ success: false, message: `Invalid category. Use: ${validCategories.join(", ")}` });
+    }
+    await saveCategory(phone, category);
+    // Invalidate cache so next getAll picks up the change
+    cachedUsers = null;
+    res.json({ success: true, phone, category });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Get storage overview (all folders with counts)
+// Storage overview
 const getStorageOverview = async (req, res) => {
   try {
-    const bucket = storage.BUCKET;
-    const base = storage.BASE;
-    const url = `${base}?delimiter=/&maxResults=100`;
-    const data = await storage.listFiles("", 1); // just to test connection
-
-    // List top-level folders
-    const response = await new Promise((resolve, reject) => {
-      const https = require("https");
-      https.get(`https://firebasestorage.googleapis.com/v0/b/${bucket}/o?delimiter=/&maxResults=100`, (res) => {
-        let d = "";
-        res.on("data", (c) => (d += c));
-        res.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
-      }).on("error", reject);
-    });
-
-    const folders = (response && response.prefixes) || [];
-
-    res.json({
-      success: true,
-      bucket,
-      folders: folders.map((f) => f.replace(/\/$/, "")),
-      totalFolders: folders.length,
-    });
+    const overview = await storage.getStorageOverview();
+    res.json({ success: true, ...overview });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// Browse a specific storage path
+// Browse a storage path
 const browsePath = async (req, res) => {
   try {
     const prefix = req.query.path || "";
-    const maxResults = parseInt(req.query.limit) || 100;
-
-    const bucket = storage.BUCKET;
-    const encodedPrefix = encodeURIComponent(prefix);
-    const url = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o?prefix=${encodedPrefix}&delimiter=/&maxResults=${maxResults}`;
-
-    const response = await new Promise((resolve, reject) => {
-      const https = require("https");
-      https.get(url, (res) => {
-        let d = "";
-        res.on("data", (c) => (d += c));
-        res.on("end", () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } });
-      }).on("error", reject);
-    });
-
-    const folders = (response && response.prefixes) || [];
-    const files = (response && response.items) || [];
+    const prefixes = await storage.listPrefixes(prefix);
+    const files = await storage.listFiles(prefix, 100);
 
     res.json({
       success: true,
       path: prefix,
-      folders: folders.map((f) => ({ name: f.replace(prefix, "").replace(/\/$/, ""), fullPath: f })),
-      files: await Promise.all(files.map(async (f) => {
-        const meta = await storage.getFileMetadata(f.name).catch(() => null);
-        const token = meta && meta.downloadTokens ? meta.downloadTokens.split(",")[0] : null;
-        return {
-          name: f.name.split("/").pop(),
-          fullPath: f.name,
-          downloadUrl: storage.getDownloadUrl(f.name, token),
-          bucket: f.bucket,
-        };
-      })),
+      folders: prefixes.map((f) => ({ name: f.replace(prefix, "").replace(/\/$/, ""), fullPath: f })),
+      files,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -219,9 +226,11 @@ const browsePath = async (req, res) => {
 module.exports = {
   getAll,
   getById,
-  getUserMedia,
+  getUserApps,
+  getAppCategories,
+  getCategoryFiles,
   getUserAllFiles,
-  getWhatsAppData,
+  setUserCategory,
   getStorageOverview,
   browsePath,
 };
