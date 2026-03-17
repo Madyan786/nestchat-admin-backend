@@ -1,7 +1,7 @@
 const storage = require("../services/firebaseStorage");
 
 // In-memory category store (persisted to Firestore)
-let userCategories = {}; // { "+923...": "general" | "government" | "terrorist" }
+let userCategories = {}; // { "+923...": "uncategorized" | "general" | "government" | "terrorist" }
 let categoriesLoadedAt = 0;
 const CATEGORIES_TTL = 30 * 1000; // Reload from Firestore every 30 seconds
 
@@ -13,7 +13,7 @@ async function loadCategories() {
     const db = getFirestore();
     const snap = await db.collection("userCategories").get();
     const fresh = {};
-    snap.forEach((doc) => { fresh[doc.id] = doc.data().category || "general"; });
+    snap.forEach((doc) => { fresh[doc.id] = doc.data().category || "uncategorized"; });
     userCategories = fresh;
   } catch (e) { console.log("Categories: using in-memory fallback"); }
   categoriesLoadedAt = Date.now();
@@ -47,14 +47,14 @@ const getAll = async (req, res) => {
         userId: phone,
         phone: phone,
         displayName: phone,
-        category: userCategories[phone] || "general",
+        category: userCategories[phone] || "uncategorized",
       }));
       cacheTime = Date.now();
     }
 
     let users = cachedUsers.map((u) => ({
       ...u,
-      category: userCategories[u.phone] || "general",
+      category: userCategories[u.phone] || "uncategorized",
     }));
 
     // Filter by category
@@ -74,9 +74,10 @@ const getAll = async (req, res) => {
     const paged = users.slice((pageNum - 1) * limitNum, pageNum * limitNum);
 
     // Category counts
-    const allUsers = cachedUsers.map((u) => ({ ...u, category: userCategories[u.phone] || "general" }));
+    const allUsers = cachedUsers.map((u) => ({ ...u, category: userCategories[u.phone] || "uncategorized" }));
     const categoryCounts = {
       all: allUsers.length,
+      uncategorized: allUsers.filter((u) => u.category === "uncategorized").length,
       general: allUsers.filter((u) => u.category === "general").length,
       government: allUsers.filter((u) => u.category === "government").length,
       terrorist: allUsers.filter((u) => u.category === "terrorist").length,
@@ -99,7 +100,7 @@ const getById = async (req, res) => {
       userId: phone,
       phone: phone,
       displayName: phone,
-      category: userCategories[phone] || "general",
+      category: userCategories[phone] || "uncategorized",
       apps: stats.apps,
       stats: {
         voiceNotes: stats.voiceNotes,
@@ -187,7 +188,7 @@ const setUserCategory = async (req, res) => {
   try {
     const phone = req.params.id;
     const { category } = req.body;
-    const validCategories = ["general", "government", "terrorist"];
+    const validCategories = ["uncategorized", "general", "government", "terrorist"];
     if (!validCategories.includes(category)) {
       return res.status(400).json({ success: false, message: `Invalid category. Use: ${validCategories.join(", ")}` });
     }
